@@ -1,1 +1,242 @@
-index.html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ShortStops Travel Map</title>
+
+  <!-- Leaflet -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100vh; width: 100vw; }
+    .legend {
+      background: white;
+      padding: 10px 12px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+      font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      max-width: 280px;
+    }
+    .legend .row { display: flex; align-items: centre; gap: 8px; margin-top: 6px; }
+    .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.2); }
+    .note { font-size: 12px; colour: #444; margin-top: 8px; }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+
+  <script>
+    // ==========================
+    // Visited data (MATCH BY COUNTRY NAME, not ISO codes)
+    // This is more reliable across different GeoJSON datasets.
+    // ==========================
+    const visitedByName = {
+      "Philippines": "2011, 2013, 2015, 2017, 2019, 2022, 2023, Dec 2023, 2024, 2025",
+      "United Kingdom": "Home base (years not listed)",
+      "France": "2016, 2017, 2025",
+      "Switzerland": "2016, 2025",
+      "Italy": "2016, 2020, 2025",
+      "Germany": "2016, 2017, 2019, 2022, 2025",
+      "Netherlands": "2016, 2019",
+      "Belgium": "2016, 2017, 2018, 2019, 2022, 2024",
+      "Austria": "2017, 2025",
+      "Slovenia": "2017",
+      "Croatia": "2017",
+      "Bosnia and Herzegovina": "2017",
+      "Serbia": "2017, 2024",
+      "Hungary": "2017",
+      "Czech Republic": "2017",
+      "Slovakia": "2017",
+      "Spain": "2018, 2019, 2024",
+      "Finland": "2019",
+      "Estonia": "2019",
+      "Latvia": "2019",
+      "Lithuania": "2019",
+      "Belarus": "2019",
+      "Poland": "2019",
+      "Monaco": "2020",
+      "Turkey": "2022",
+      "Denmark": "2022",
+      "Ireland": "2023",
+      "Norway": "2023",
+      "Albania": "2023",
+      "Macedonia": "2023",  // many datasets label North Macedonia as "Macedonia"
+      "Malaysia": "2023",
+      "Singapore": "2023",
+      "Malta": "2024",
+      "Greece": "2024",
+      "Romania": "2024",
+      "Bulgaria": "2024",
+      "Portugal": "2024",
+      "Morocco": "2024",
+      "Luxembourg": "2024",
+      "Tunisia": "2025",
+      "Andorra": "2025",
+      "Cyprus": "2025",
+      "San Marino": "2025",
+      "Liechtenstein": "2025",
+      "Barbados": "2025",
+      "Antigua and Barbuda": "2025",
+      "Saint Lucia": "2025",
+      "Grenada": "2025",
+      "Saint Kitts and Nevis": "2025"
+    };
+
+    // ==========================
+    // Territories / special cases as markers
+    // (Some are not present as polygons in standard country datasets)
+    // ==========================
+    const territoryMarkers = [
+      { name: "Vatican City", years: "2016", lat: 41.9029, lng: 12.4534 },
+      { name: "England", years: "Home base", lat: 52.3555, lng: -1.1743 },
+      { name: "Wales", years: "Home base", lat: 52.1307, lng: -3.7837 },
+      { name: "Scotland", years: "Home base", lat: 56.4907, lng: -4.2026 },
+      { name: "Northern Ireland", years: "2023", lat: 54.5973, lng: -5.9301 },
+      { name: "Kosovo", years: "2023", lat: 42.6675, lng: 21.1662 },
+      { name: "Northern Cyprus", years: "2025", lat: 35.1856, lng: 33.3823 },
+      { name: "Martinique", years: "2025", lat: 14.6415, lng: -61.0242 },
+      { name: "Sint Maarten", years: "2025", lat: 18.0425, lng: -63.0548 },
+      { name: "Saint-Martin", years: "2025", lat: 18.0708, lng: -63.0501 },
+      { name: "British Virgin Islands", years: "2025", lat: 18.4207, lng: -64.6399 },
+      { name: "Latvia (Riga)", years: "2019", lat: 56.9496, lng: 24.1052 },
+      { name: "Lithuania (Vilnius)", years: "2019", lat: 54.6872, lng: 25.2797 }
+    ];
+
+    // ==========================
+    // Helper functions for name matching
+    // ==========================
+    function getAdminName(feature) {
+      // Common keys in GeoJSON datasets:
+      // - ADMIN (datasets/geo-countries)
+      // - name (many others)
+      const raw = (feature?.properties?.ADMIN || feature?.properties?.name || "").trim();
+      return raw;
+    }
+
+    function getVisitedYears(feature) {
+      const name = getAdminName(feature);
+      return visitedByName[name] || null;
+    }
+
+    // ==========================
+    // Map setup
+    // ==========================
+    const map = L.map("map", { zoomControl: true }).setView([20, 0], 2);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Styling
+    function baseStyle(feature) {
+      const years = getVisitedYears(feature);
+      const isVisited = !!years;
+
+      return {
+        weight: 1,
+        opacity: 1,
+        color: isVisited ? "#1f2937" : "#6b7280",
+        fillOpacity: isVisited ? 0.55 : 0.12,
+        fillColor: isVisited ? "#0ea5e9" : "#cbd5e1"
+      };
+    }
+
+    function highlightStyle() {
+      return {
+        weight: 2,
+        color: "#111827",
+        fillOpacity: 0.75
+      };
+    }
+
+    let geojsonLayer;
+
+    function onEachFeature(feature, layer) {
+      const name = getAdminName(feature);
+      const years = getVisitedYears(feature);
+
+      layer.on({
+        mouseover: (e) => {
+          e.target.setStyle(highlightStyle());
+          e.target.bringToFront();
+        },
+        mouseout: (e) => {
+          geojsonLayer.resetStyle(e.target);
+        }
+      });
+
+      if (years) {
+        layer.bindPopup(`<strong>${name}</strong><br/>Visited: ${years}`);
+        layer.bindTooltip(`${name}`, { sticky: true });
+      }
+    }
+
+    // ==========================
+    // Load world countries GeoJSON
+    // ==========================
+    const GEOJSON_URL = "https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson";
+
+    fetch(GEOJSON_URL)
+      .then(res => {
+        if (!res.ok) throw new Error("GeoJSON fetch failed");
+        return res.json();
+      })
+      .then(data => {
+        geojsonLayer = L.geoJSON(data, {
+          style: baseStyle,
+          onEachFeature
+        }).addTo(map);
+
+        // Add territory markers
+        territoryMarkers.forEach(t => {
+          L.circleMarker([t.lat, t.lng], {
+            radius: 6,
+            weight: 2,
+            color: "#111827",
+            fillColor: "#f97316",
+            fillOpacity: 0.9
+          })
+          .addTo(map)
+          .bindPopup(`<strong>${t.name}</strong><br/>Visited: ${t.years}`);
+        });
+      })
+      .catch(err => {
+        console.error(err);
+        alert("Map data failed to load. If GitHub is blocked, host the GeoJSON locally.");
+      });
+
+    // ==========================
+    // Legend
+    // ==========================
+    const legend = L.control({ position: "topright" });
+    legend.onAdd = function () {
+      const div = L.DomUtil.create("div", "legend");
+      div.innerHTML = `
+        <div><strong>ShortStops Travel Map</strong></div>
+        <div class="row"><span class="swatch" style="background:#0ea5e9;"></span> Visited</div>
+        <div class="row"><span class="swatch" style="background:#cbd5e1;"></span> Not visited</div>
+        <div class="row"><span class="swatch" style="background:#f97316;"></span> Territories (marker)</div>
+        <div class="note">
+          Click a shaded country to see years visited. Some territories are shown as markers.
+        </div>
+      `;
+      return div;
+    };
+    legend.addTo(map);
+  </script>
+</body>
+</html>
